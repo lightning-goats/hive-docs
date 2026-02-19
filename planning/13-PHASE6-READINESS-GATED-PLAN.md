@@ -37,24 +37,31 @@ Notes:
 
 ## 3. Ownership Boundaries (Planned)
 
-`cl-hive-comms` owns:
+`cl-hive-comms` owns (in its own SQLite DB):
 - Transport abstraction and Nostr connectivity
-- Marketplace client and liquidity marketplace client
+- Marketplace client and liquidity marketplace client (planned — tables deferred to extraction)
 - Payment routing (Bolt11/Bolt12/L402/Cashu hooks)
 - Policy engine and client-oriented RPC surface
-- Tables: `nostr_state`, `management_receipts`, `marketplace_*`, `liquidity_*`
+- Tables (current): `nostr_state`, `comms_advisors`, `comms_advisor_auth`, `comms_aliases`, `comms_payments`, `comms_trials`, `management_receipts`, `comms_policy`, `comms_replay_nonces`, `transport_registry`
+- Tables (planned, deferred to extraction): `marketplace_*`, `liquidity_*`
 
-`cl-hive-archon` owns:
+`cl-hive-archon` owns (in its own SQLite DB):
 - Archon DID provisioning and DID bindings
-- Credential verification upgrade path and revocation checks
-- Dmail transport registration
-- Vault/backup/recovery integrations
-- Tables: `did_credentials`, `did_reputation_cache`, `archon_*`
+- Governance polling and voting
+- Vault/backup/recovery integrations (planned)
+- Tables (current): `archon_identity`, `archon_bindings`, `archon_polls`, `archon_votes`
+- Tables (planned, deferred to extraction): `did_credentials`, `did_reputation_cache` (currently in cl-hive)
 
-`cl-hive` owns:
+`cl-hive` owns (in its own SQLite DB):
 - Gossip, topology, settlements, governance, fleet coordination
 - Existing hive membership/economics/state management
-- Tables: existing hive tables plus `settlement_*`, `escrow_*`
+- Tables: existing 50 hive tables including `nostr_state`, `management_receipts`, `management_credentials`, `did_credentials`, `did_reputation_cache`, `settlement_*`, `escrow_*`
+
+**Note on duplicate table names:** Both cl-hive and cl-hive-comms define `nostr_state` and `management_receipts` with **divergent schemas** in separate databases. This is intentional — each plugin has its own isolated DB. The schema differences reflect different purposes:
+- cl-hive's `management_receipts`: FK to `management_credentials`, includes `danger_score`, `state_hash_*`, `executor_signature`
+- cl-hive-comms's `management_receipts`: hash-chained receipts with `prev_hash`/`receipt_hash`, no FK
+
+During future table extraction (if needed), these must be reconciled via a migration plan.
 
 ### 3A. Marketplace Modularity Decision
 
@@ -112,7 +119,7 @@ If triggered, run an RFC first:
 All gates must pass before any Phase 6 code extraction starts.
 
 ### Gate A: Reliability — PASS (2026-02-19)
-- cl-hive: 2196 passed, 0 failed, 2 skipped
+- cl-hive: 2193 passed, 0 failed, 2 skipped
 - cl_revenue_ops: 619 passed, 0 failed
 - Open GitHub issues (#69, #70) are feature requests, not defects
 - No Sev1/Sev2 incidents — production stable through soak window
@@ -137,22 +144,31 @@ Plugin dependency matrix:
 | cl-hive + cl-hive-comms | Yes | Comms detected at startup, additive only |
 | cl-hive + cl-hive-comms + cl-hive-archon | Yes | Full Phase 6 stack |
 | cl-hive-comms standalone | Yes | No cl-hive dependency required |
-| cl-hive-archon without cl-hive-comms | No | Entrypoint blocks startup |
+| cl-hive-archon without cl-hive-comms | No | Docker entrypoint blocks startup; plugin logs warning |
 
 Backward compatibility: existing monolith deployments continue working unchanged. New plugins are additive-only and detected via CLN plugin list at startup.
 
-### Cross-Plugin Table Access Inventory
+### Cross-Plugin Database Isolation
 
-Each plugin owns its tables exclusively. Cross-plugin access is read-only:
+Each plugin owns its own SQLite database exclusively. **No cross-plugin database reads exist today.** Each plugin is fully self-contained:
 
-| Reader | Source Table(s) | Purpose |
-|--------|----------------|---------|
-| cl-hive | `nostr_state` (comms) | Read Nostr pubkey for fleet identity binding |
-| cl-hive | `comms_advisors` (comms) | Read advisor list for fleet-aware authorization |
-| cl-hive-archon | `nostr_state` (comms) | Read Nostr pubkey for DID binding attestation |
-| cl-hive-comms | (none) | Standalone — no cross-plugin reads required |
+| Plugin | Database | Tables | Cross-Plugin Reads |
+|--------|----------|--------|--------------------|
+| cl-hive | `cl_hive.db` | 50 tables | None |
+| cl-hive-comms | `cl_hive_comms.db` | 10 tables | None |
+| cl-hive-archon | `cl_hive_archon.db` | 4 tables | None |
 
-Write access is never permitted across plugin boundaries. All mutations go through the owning plugin's RPC interface.
+**Design principle:** All cross-plugin communication uses CLN RPC, never direct SQLite reads. Write access is never permitted across plugin boundaries.
+
+**Planned future cross-plugin RPC calls** (not yet implemented):
+
+| Caller | Target RPC | Purpose |
+|--------|-----------|---------|
+| cl-hive | `hive-client-identity` (comms) | Read Nostr pubkey for fleet identity binding |
+| cl-hive | `hive-client-discover` (comms) | Read advisor list for fleet-aware authorization |
+| cl-hive-archon | `hive-client-identity` (comms) | Read Nostr pubkey for DID binding attestation |
+
+These will be implemented during Phase 6 extraction when cross-plugin integration is needed.
 
 ---
 

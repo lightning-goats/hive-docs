@@ -19,7 +19,7 @@ The CLN implementation is structured as **three separate, independently installa
 |--------|---------|-------------|
 | **`cl-hive-comms`** | Nostr DM + REST/rune transport, subscription management, Nostr marketplace publishing | ✓ Entry point for commercial customers |
 | **`cl-hive-archon`** | DID identity, credentials, dmail, vault | Requires cl-hive-comms |
-| **`cl-hive`** | Coordination (gossip, topology, settlements, advisor) | Requires cl-hive-comms |
+| **`cl-hive`** | Coordination (gossip, topology, settlements, advisor) | ✓ Standalone; optional comms integration |
 
 A fourth plugin, **`cl-revenue-ops`**, handles local fee policy and profitability and already exists as a standalone tool.
 

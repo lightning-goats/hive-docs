@@ -12,7 +12,7 @@ Prepare Docker deployment to support the future 3-plugin stack without changing 
 Current production behavior remains:
 - `cl-hive`
 - `cl-revenue-ops`
-- existing required dependencies (CLBOSS, Sling, c-lightning-REST)
+- existing dependencies (Sling, c-lightning-REST; CLBOSS optional)
 
 ---
 
@@ -103,6 +103,6 @@ Planned `docker-compose` behavior:
 ## 7. Change Control
 
 Do not merge Docker enablement PRs until:
-- Phase 6 readiness gates in `docs/planning/13-PHASE6-READINESS-GATED-PLAN.md` are green.
+- Phase 6 readiness gates in `planning/13-PHASE6-READINESS-GATED-PLAN.md` are green.
 - Manual non-docker install document is validated end-to-end.
 
