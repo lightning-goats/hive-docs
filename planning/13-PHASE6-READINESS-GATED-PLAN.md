@@ -141,6 +141,19 @@ Plugin dependency matrix:
 
 Backward compatibility: existing monolith deployments continue working unchanged. New plugins are additive-only and detected via CLN plugin list at startup.
 
+### Cross-Plugin Table Access Inventory
+
+Each plugin owns its tables exclusively. Cross-plugin access is read-only:
+
+| Reader | Source Table(s) | Purpose |
+|--------|----------------|---------|
+| cl-hive | `nostr_state` (comms) | Read Nostr pubkey for fleet identity binding |
+| cl-hive | `comms_advisors` (comms) | Read advisor list for fleet-aware authorization |
+| cl-hive-archon | `nostr_state` (comms) | Read Nostr pubkey for DID binding attestation |
+| cl-hive-comms | (none) | Standalone — no cross-plugin reads required |
+
+Write access is never permitted across plugin boundaries. All mutations go through the owning plugin's RPC interface.
+
 ---
 
 ## 5. Pre-Implementation Deliverables (Allowed Now)
@@ -170,9 +183,24 @@ Backward compatibility: existing monolith deployments continue working unchanged
 1. `cl-hive-comms` alpha release (standalone mode, no `cl-hive` dependency)
 2. `cl-hive-archon` alpha release (requires `cl-hive-comms`)
 3. `cl-hive` compatibility release with sibling plugin detection
-4. Canary deployment on one node
+4. Canary deployment on one node (see criteria below)
 5. Staged rollout to remaining nodes
 6. Default-enable policy only after stability window completes
+
+### Canary Testing Criteria (Step 4)
+
+Before promoting to staged rollout, the canary node must pass all of:
+
+| Criterion | Threshold | Measurement |
+|-----------|-----------|-------------|
+| Uptime | 72h continuous without crash/restart | `hive-phase6-plugins` shows active through window |
+| Test suite | All plugin tests pass on canary | `pytest tests/ -q` for each plugin |
+| Forwarding | No forwarding regression vs. baseline | Compare 7-day forwarding stats pre/post |
+| Memory | No growth trend over 72h window | RSS stable within 20% of baseline |
+| Logs | Zero ERROR-level entries from new plugins | `grep ERROR` in CLN log for comms/archon |
+| Fleet sync | Hive gossip + state sync unaffected | `hive-status` shows normal on all peers |
+
+**Rollback trigger:** Any criterion fails → disable plugin via `HIVE_*_ENABLED=false`, restart, file incident report.
 
 ---
 
