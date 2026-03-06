@@ -1,27 +1,32 @@
+
+
+
+Here is the revised plan with the monolithic mode entirely removed, configuring `cl-hive` to act strictly as an orchestrator that requires the presence of its companion plugins to operate.
+
+***
+
 # Phase 6 Handover Implementation Plan
 
 **Status:** Draft
-**Target:** Strict separation of concerns with graceful degradation.
+**Target:** Strict microservice architecture with hard dependencies on specialized plugins.
 
 ## 1. Objective
 
-Transition `cl-hive` from a monolithic plugin into a **Coordination Layer** that orchestrates the fleet by consuming services from specialized plugins (`cl-hive-comms`, `cl-hive-archon`).
+Transition `cl-hive` from a standalone monolithic plugin into a strict **Coordination Layer** that orchestrates the fleet by consuming services from specialized plugins (`cl-hive-comms`, `cl-hive-archon`). 
 
-Crucially, `cl-hive` must retain "Dual-Stack" capability:
-1.  **Monolith Mode (Fallback):** If specialized plugins are missing, use internal modules for Transport (Nostr) and Identity (Local Keys).
-2.  **Coordinated Mode (Target):** If plugins are detected, disable internal modules and delegate Transport/Identity via RPC.
+Monolithic operation is being completely purged. `cl-hive` will no longer generate its own keys or manage its own Nostr websocket connections. **Coordinated Mode** is the *only* mode of operation, and `cl-hive` will only enable its functionality if the required companion plugins are detected on the node.
 
 ---
 
 ## 2. Architecture
 
-### Tiered Functionality Matrix
+### Strict Microservice Model
 
-| Tier | Installed Plugins | Mode | Capabilities |
-| :--- | :--- | :--- | :--- |
-| **Stealth / Basic** | **`cl-hive` Only** | **Local / P2P** | • **Routing & Settlements:** Fully functional.<br>• **Gossip:** Mesh propagation (Bolt8).<br>• **Privacy:** Maximum (Dark Fleet).<br>• **Transport:** Internal Nostr (optional/fallback). |
-| **Public / Basic** | **`cl-hive` + `comms`** | **Networked** | • **Global Reach:** `comms` handles Nostr.<br>• **Advisor Access:** Via `comms` marketplace.<br>• **Identity:** Nostr-only (via `comms`). |
-| **Full Member** | **Full Stack** | **Sovereign** | • **Governance:** Voting via `archon`.<br>• **Identity:** DID via `archon`.<br>• **Security:** Keys isolated in `archon` vault. |
+The fleet operates as a trio of dependent services. `cl-hive` acts as the "Brain" and refuses to start unless the "Body" and "Passport" are present.
+
+*   **`cl-hive` (The Brain):** Pure coordination, routing, mesh propagation logic, and settlement handling. Contains zero native transport or identity generation code.
+*   **`cl-hive-comms` (The Body):** Handles all external network communication (Nostr websockets). Provides global reach and client command interfaces.
+*   **`cl-hive-archon` (The Passport):** Handles DID identity, sovereign voting, and acts as the secure vault for signing.
 
 ---
 
@@ -29,81 +34,75 @@ Crucially, `cl-hive` must retain "Dual-Stack" capability:
 
 ### Phase A: Specialized Plugin Enhancements
 
-Before `cl-hive` can offload duties, the specialized plugins must expose the necessary "service" RPCs.
+Before `cl-hive` can be stripped of its monolithic code, the specialized plugins must expose the necessary "service" RPCs for the Coordination Layer to consume.
 
-#### 1. `cl-hive-comms` (The Body)
-Needs to allow the Brain (`cl-hive`) to speak and listen.
+#### 1. `cl-hive-comms` (Transport Service)
+Needs to allow `cl-hive` to speak and listen over the network.
 
 *   **NEW RPC:** `hive-comms-send-dm(recipient_pubkey, plaintext)`
-    *   Allows `cl-hive` to send protocol messages (Handshakes, Intents) using `comms`'s connection and identity.
+    *   Allows `cl-hive` to send protocol messages (Handshakes, Intents) using `comms`'s connection.
 *   **NEW RPC:** `hive-comms-publish-event(event_json)`
     *   Allows `cl-hive` to broadcast Gossip and Marketplace offers.
 *   **NEW FEATURE:** Inbound Message Forwarding
     *   `cl-hive-comms` needs a mechanism to push decrypted DMs (Intents, Handshakes) to `cl-hive`.
-    *   *Mechanism:* `cl-hive` registers an RPC `hive-inject-packet`. `cl-hive-comms` calls this when it receives a relevant DM.
+    *   *Mechanism:* `cl-hive` exposes an RPC `hive-inject-packet`. `cl-hive-comms` calls this when it receives a relevant DM.
 
-#### 2. `cl-hive-archon` (The Passport)
-Needs to provide signing services so `cl-hive` doesn't need the private key.
+#### 2. `cl-hive-archon` (Identity Service)
+Needs to provide signing and identity services so `cl-hive` operates without private keys.
 
-*   **NEW RPC:** `hive-archon-sign-message(message_hex)` (or similar)
-    *   Allows `cl-hive` to sign gossip/payloads with the DID key.
-*   **VERIFY:** Ensure `hive-archon-status` returns the full public DID Identity for `cl-hive` to use in headers.
+*   **NEW RPC:** `hive-archon-sign-message(message_hex)`
+    *   Allows `cl-hive` to sign gossip/payloads with the DID key securely held in the archon vault.
+*   **VERIFY:** Ensure `hive-archon-status` returns the full public DID Identity for `cl-hive` to use in headers and payload construction.
 
 ---
 
-### Phase B: `cl-hive` Refactoring (The Brain)
+### Phase B: Purging the Monolith (`cl-hive` Refactoring)
 
-#### 1. Transport Adapter Pattern
-Refactor `modules/nostr_transport.py` to support swappable backends.
+#### 1. Transport Layer Purge & Bridge
+Delete internal connection management in `modules/nostr_transport.py` and replace it entirely with an external bridge.
 
-*   **Abstract Base Class:** `TransportInterface`
-*   **Implementation A:** `InternalNostrTransport` (The current code).
-*   **Implementation B:** `ExternalCommsTransport` (The Bridge).
-    *   `send_dm()` -> calls `plugin.rpc.call("hive-comms-send-dm", ...)`
-    *   `publish()` -> calls `plugin.rpc.call("hive-comms-publish-event", ...)`
+*   **REMOVE:** `InternalNostrTransport` (websocket connections, relay management, internal event publishing).
+*   **IMPLEMENT:** `ExternalCommsTransport` (The Bridge).
+    *   `send_dm()` -> strictly routes via `plugin.rpc.call("hive-comms-send-dm", ...)`
+    *   `publish()` -> strictly routes via `plugin.rpc.call("hive-comms-publish-event", ...)`
 
-#### 2. Identity Adapter Pattern
-Refactor `modules/did_credentials.py` to support remote identity.
+#### 2. Identity Layer Purge & Bridge
+Delete local identity generation in `modules/did_credentials.py` and replace it entirely with a remote bridge.
 
-*   **Implementation A:** `LocalIdentity` (Current logic, generates/stores keys in `cl_hive.db`).
-*   **Implementation B:** `RemoteArchonIdentity` (The Bridge).
-    *   `get_pubkey()` -> calls `hive-archon-status`.
-    *   `sign()` -> calls `hive-archon-sign-message`.
+*   **REMOVE:** `LocalIdentity` (generating/storing keys in `cl_hive.db`).
+*   **IMPLEMENT:** `RemoteArchonIdentity` (The Bridge).
+    *   `get_pubkey()` -> queries `hive-archon-status`.
+    *   `sign()` -> requests signature via `hive-archon-sign-message`.
 
 #### 3. Inbound Ingestion RPC
 *   **NEW RPC:** `hive-inject-packet(payload)`
-    *   Exposed by `cl-hive` ONLY when running in Coordinated Mode.
-    *   Accepts decrypted payloads from `cl-hive-comms`.
-    *   Feeds them into the existing `_dispatch_hive_message` logic.
+    *   Accepts decrypted payloads pushed from `cl-hive-comms`.
+    *   Feeds them directly into the existing `_dispatch_hive_message` logic.
 
 ---
 
 ### Phase C: Orchestration & Initialization
 
-Update `cl-hive.py` `init()` logic to wire the components.
+Update `cl-hive.py` `getmanifest` and `init` logic to enforce the strict dependency requirements.
 
-1.  **Detection:** Call `_detect_phase6_optional_plugins`.
-2.  **Selection:**
-    *   If `cl-hive-comms` is active:
-        *   Instantiate `ExternalCommsTransport`.
-        *   Register `hive-inject-packet`.
-        *   **Suppress** registration of conflicting user RPCs (`hive-client-*`) to avoid CLN startup errors (let `comms` handle the user-facing client commands).
-    *   Else:
-        *   Instantiate `InternalNostrTransport`.
-        *   Register all RPCs as normal.
-3.  **Identity:**
-    *   If `cl-hive-archon` is active:
-        *   Instantiate `RemoteArchonIdentity`.
-    *   Else:
-        *   Instantiate `LocalIdentity`.
+1.  **Dependency Detection:** During initialization, call `_detect_required_plugins` to check for the active presence of `cl-hive-comms` and `cl-hive-archon`.
+2.  **Enforcement:**
+    *   **If missing either plugin:** `cl-hive` logs a critical warning (`"Required plugins cl-hive-comms and/or cl-hive-archon not found. cl-hive will disable itself."`) and gracefully disables its functionality (either by passing the `disable` flag in the manifest or idling the plugin without registering operational hooks).
+    *   **If both plugins are active:** Coordinated mode is enabled.
+3.  **Bootstrapping:**
+    *   Instantiate `ExternalCommsTransport`.
+    *   Instantiate `RemoteArchonIdentity`.
+    *   Register `hive-inject-packet`.
+    *   Suppress registration of legacy user-facing RPCs (`hive-client-*`) as these are now exclusively handled by `cl-hive-comms`.
 
 ---
 
 ## 4. Verification Checklist
 
-1.  **Standalone Test:** Run `cl-hive` alone. Verify it generates keys, connects to relays, and gossips.
-2.  **Full Stack Test:** Run all 3 plugins.
-    *   Verify `cl-hive` does **not** open a WebSocket.
-    *   Verify `cl-hive` logs "Using External Transport (cl-hive-comms)".
-    *   Trigger a gossip broadcast -> Verify it goes out via `cl-hive-comms`.
-    *   Receive a DM -> Verify `cl-hive-comms` decrypts it and pushes to `cl-hive` via `hive-inject-packet`.
+1.  **Missing Dependency Test (Comms):** Disable `cl-hive-comms`. Start CLN. Verify `cl-hive` detects the missing dependency, logs the appropriate error, and safely disables itself without crashing the node.
+2.  **Missing Dependency Test (Archon):** Disable `cl-hive-archon`. Start CLN. Verify `cl-hive` disables itself.
+3.  **Full Stack Test:** Run all 3 plugins.
+    *   Verify `cl-hive` starts successfully in Coordinated Mode.
+    *   Verify `cl-hive` opens **zero** websockets/network connections of its own.
+    *   Trigger a gossip broadcast -> Verify `cl-hive` successfully passes the payload to `cl-hive-archon` for signing, and `cl-hive-comms` for broadcasting.
+    *   Receive a DM -> Verify `cl-hive-comms` decrypts it and successfully pushes it to `cl-hive` via the `hive-inject-packet` RPC.
